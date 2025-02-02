@@ -72,3 +72,5 @@ export function html(strings, ...expressions) {
   template.innerHTML = strings.reduce((result, str, i) => result + str + (expressions[i] ?? ''), '')
   return template
 }
+
+export const assetsBaseUrl = import.meta.url.split('/').slice(0, -1).join('/')

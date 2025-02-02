@@ -1,4 +1,4 @@
-import { createSvg, createSvgElement, decimal2, html } from './assets/utils.js'
+import { assetsBaseUrl, createSvg, createSvgElement, decimal2, html } from './assets/utils.js'
 
 class BouncingBall extends HTMLElement {
   static localName = 'bouncing-ball'
@@ -28,7 +28,6 @@ class BouncingBall extends HTMLElement {
         opacity: 0.4;
       }
     </style>
-    <audio src="./assets/basketball.wav"></audio>
   `
   ball = createSvgElement('ellipse')
   /** @type {'stopped'|'playing'|'disposing'} */
@@ -79,27 +78,13 @@ class BouncingBall extends HTMLElement {
   handleEvent(event) {
     if (event.type == 'click') {
       // Toggle animation.
-      if (this.status == 'stopped') this.play()
+      if (this.status == 'stopped') this.start()
       else if (this.status == 'playing') this.stop()
     }
   }
 
-  /** Must be called during some user interaction, e.g. click. */
-  setupAudio() {
-    // Do nothing if audio was already initialized.
-    if (this.audioElement) return
-    // Create audio context and connect audio element.
-    this.audioElement = this.shadowRoot.querySelector('audio')
-    const audioContext = new AudioContext()
-    audioContext
-      .createMediaElementSource(this.audioElement)
-      .connect(audioContext.destination)
-  }
-
-  play() {
-    this.status = 'playing'
-    this.dataset.action = 'stop'
-    this.setupAudio()
+  generateAnimation() {
+    const self = this
 
     const numFramesOfBouncing = Math.floor(this.bounceDuration / this.deltaT)
     const deltaR = this.radius * this.maxBallRadiusDeformationPercentage / numFramesOfBouncing / 2
@@ -107,7 +92,7 @@ class BouncingBall extends HTMLElement {
     // The deltaY with no acceleration.
     const uniformDeltaY = Math.floor(distance * this.deltaT / this.fallDuration)
 
-    async function* animate(self) {
+    function* animationGenerator() {
       while (true) {
         const currentY = Number(self.ball.get('cy'))
         if (self.isBouncing) {
@@ -142,7 +127,7 @@ class BouncingBall extends HTMLElement {
           // Stop animation if status is disposing.
           if (self.status == 'disposing') {
             self.status = 'stopped'
-            return Promise.resolve()
+            return
           }
         } else {
 //// Compute deltaY.
@@ -160,7 +145,7 @@ class BouncingBall extends HTMLElement {
             // Do not go below the container.
             self.ball.set('cy', decimal2(BouncingBall.containerHeight - self.radius - BouncingBall.strokeWidth))
             // Play bouncing sound.
-            self.audioElement.play()
+            self.playSound()
             // Start bouncing.
             self.isBouncing = true
           } else {
@@ -168,35 +153,64 @@ class BouncingBall extends HTMLElement {
           self.ball.set('cy', decimal2(currentY + deltaY))
           }
         }
-        yield Promise.resolve()
+        yield
       }
     }
+    this.animation = animationGenerator()
+  }
 
-    const animation = animate(this)
+  playSound() {
+    const sound = this.audioContext.createBufferSource()
+    sound.buffer = this.soundBuffer
+    sound.connect(this.audioContext.destination)
+    sound.start(0)
+  }
 
-    const loop = async () => {
-      // Next animation frame can run when
-      // current time is greater than last frame time plus frame duration.
-      if (document.timeline.currentTime > this.lastFrameTime + this.deltaT) {
-        await animation.next()
-        this.lastFrameTime = document.timeline.currentTime
-      }
-      if (this.status == 'stopped') {
-        this.dataset.action = 'start'
-        this.ball.classList.remove('disposing')
-        cancelAnimationFrame(this.frameRequestId)
-      } else {
-        this.frameRequestId = requestAnimationFrame(loop)
-      }
+  /** Must be called during some user interaction, e.g. click. */
+  async setupAudio() {
+    // Do nothing if audio was already initialized.
+    if (this.audioContext) return
+    this.audioContext = new AudioContext()
+    // Fetch audio.
+    const response = await fetch(`${assetsBaseUrl}/basketball.wav`)
+    const arrayBuffer = await response.arrayBuffer()
+    this.soundBuffer = await this.audioContext.decodeAudioData(arrayBuffer)
+  }
+
+  loop() {
+    // Next animation frame can run when
+    // current time is greater than last frame time plus frame duration.
+    if (document.timeline.currentTime > this.lastFrameTime + this.deltaT) {
+      this.animation.next()
+      this.lastFrameTime = document.timeline.currentTime
     }
-    // Will start animation immediatly.
+    if (this.status == 'stopped') {
+      this.dataset.action = 'start'
+      this.ball.classList.remove('disposing')
+      this.animation.return()
+      cancelAnimationFrame(this.frameRequestId)
+    } else {
+      this.requestAnimationFrame()
+    }
+  }
+
+  requestAnimationFrame() {
+    this.frameRequestId = requestAnimationFrame(this.loop.bind(this))
+  }
+
+  async start() {
+    this.status = 'playing'
+    this.dataset.action = 'stop'
+    await this.setupAudio()
+    this.generateAnimation()
+    // Will start animation immediately.
     // Using
     //
     //     this.lastFrameTime = document.timeline.currentTime
     //
     // would start animation after 1 frame duration.
     this.lastFrameTime = document.timeline.currentTime - this.deltaT
-    loop()
+    this.requestAnimationFrame()
   }
 
   stop() {
